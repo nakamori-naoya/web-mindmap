@@ -30,6 +30,9 @@ import {
   exportSVG,
   importJSON,
   importMarkdown,
+  parseBackupJSON,
+  exportBackupJSON,
+  type PortableImageAsset,
 } from "../io";
 import MapCanvas, { type Editing } from "../editor/MapCanvas";
 import OutlineEditor from "../editor/OutlineEditor";
@@ -41,7 +44,9 @@ import {
 } from "../editor/api";
 import { useAutosave } from "../editor/useAutosave";
 import { Help } from "./Help";
-type Modal = "help" | "export" | "recovery" | "import" | null;
+import { imageURL, uploadImage, loadImageAssets } from "../editor/imageApi";
+import { ImagePreview } from "../editor/ImagePreview";
+type Modal = "help" | "export" | "recovery" | "import" | "image" | null;
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : "処理を完了できませんでした。";
 const dateText = (date: string) =>
@@ -90,6 +95,13 @@ export default function App() {
   const [importPreview, setImportPreview] = useState<MindmapDocument | null>(
     null,
   );
+  const [importAssets, setImportAssets] = useState<PortableImageAsset[] | null>(null);
+  const [imageBusy, setImageBusy] = useState(false);
+  const imageBusyRef = useRef(false);
+  const [imageError, setImageError] = useState("");
+  const [imagePreview, setImagePreview] = useState<{ mapId: string; imageId: string; label: string } | null>(null);
+  const imageRetry = useRef<{ nodeId: string; files: File[] } | null>(null);
+  const imageFileRef = useRef<HTMLInputElement>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [snapshotPreview, setSnapshotPreview] =
     useState<MindmapDocument | null>(null);
@@ -127,6 +139,7 @@ export default function App() {
     }
   };
   const commit = (command: Command, record = true) => {
+    if (imageBusyRef.current && command.type !== "SetCamera") { setImageError("画像の取り込みが終わってから編集してください。"); return; }
     const current = docRef.current;
     if (!current) return;
     const next = executeCommand(current, command);
@@ -174,6 +187,7 @@ export default function App() {
         : null,
     );
     setError("");
+    setImageError(""); imageRetry.current = null;
     setModal(null);
     setQuery("");
     setSearchOpen(false);
@@ -192,7 +206,7 @@ export default function App() {
   const hasAuxiliaryDraft = () => {
     const current = docRef.current;
     if (!current) return false;
-    return (titleDraftRef.current !== null && !titleDraftRef.current.trim()) || Object.entries(linkDraftsRef.current).some(([id, value]) => current.nodes[id] && value !== (current.nodes[id].link || ""));
+    return imageBusyRef.current || (titleDraftRef.current !== null && !titleDraftRef.current.trim()) || Object.entries(linkDraftsRef.current).some(([id, value]) => current.nodes[id] && value !== (current.nodes[id].link || ""));
   };
   const openMap = async (id: string) => {
     setLoading(true);
@@ -319,6 +333,7 @@ export default function App() {
     };
   }, [modal]);
   const startEdit = (id: string) => {
+    if (imageBusyRef.current) { setImageError("画像の取り込みが終わってから本文を編集してください。"); return; }
     if (editingRef.current && editingRef.current.id !== id && !finishEdit())
       return;
     const current = docRef.current;
@@ -378,6 +393,7 @@ export default function App() {
   };
   const add = (kind: "child" | "next" | "previous") =>
     attempt(() => {
+      if (imageBusyRef.current) return;
       if (!finishEdit()) return;
       const current = docRef.current,
         id = selectedRef.current[0];
@@ -402,6 +418,7 @@ export default function App() {
       });
     });
   const undo = () => {
+    if (imageBusyRef.current) return;
     titleDraftRef.current = null; setTitleDraft(null);
     linkDraftsRef.current = {}; setLinkDrafts({});
     setEdit(null);
@@ -416,6 +433,7 @@ export default function App() {
     );
   };
   const redo = () => {
+    if (imageBusyRef.current) return;
     titleDraftRef.current = null; setTitleDraft(null);
     linkDraftsRef.current = {}; setLinkDrafts({});
     setEdit(null);
@@ -431,6 +449,7 @@ export default function App() {
   };
   const remove = () =>
     attempt(() => {
+      if (imageBusyRef.current) return;
       if (!finishEdit()) return;
       const current = docRef.current;
       if (!current) return;
@@ -457,6 +476,44 @@ export default function App() {
       select([parent]);
       setNotice(`${count}件を削除しました。元に戻すボタンで復元できます。`);
     });
+  const addImages = async (nodeId: string, files: File[]) => {
+    if (imageBusyRef.current || !files.length) return;
+    const initial = docRef.current;
+    if (!initial?.nodes[nodeId]) { setImageError("画像を添付するトピックを選択してください。"); return; }
+    if (!finishEdit()) return;
+    if ((initial.nodes[nodeId].images?.length || 0) + files.length > 8) { setImageError("1つのトピックには画像を8枚まで添付できます。"); return; }
+    imageBusyRef.current = true; setImageBusy(true); setImageError("");
+    imageRetry.current = { nodeId, files };
+    const mapId = initial.documentId;
+    try {
+      const uploaded = [];
+      for (const file of files) uploaded.push(await uploadImage(mapId, file));
+      const current = docRef.current;
+      if (!current || current.documentId !== mapId || !current.nodes[nodeId]) throw new Error("添付先のマップを開き直して画像を再試行してください。");
+      let next = current;
+      for (const { id: assetId, ...metadata } of uploaded) next = executeCommand(next, { type: "AttachImage", id: nodeId, assetId, metadata });
+      history.current.record(current); change(next);
+      imageRetry.current = null; setImageError(""); setNotice(`${uploaded.length}枚の画像を添付しました。元ファイルを移動しても表示できます。`);
+    } catch (cause) { setImageError(errorText(cause)); }
+    finally { imageBusyRef.current = false; setImageBusy(false); if (!hasAuxiliaryDraft()) setError(value => value.startsWith("入力中のマップ名") ? "" : value); if (imageFileRef.current) imageFileRef.current.value = ""; }
+  };
+  const openImage = (nodeId: string, index: number) => {
+    if (!finishEdit()) return;
+    const current = docRef.current, imageId = current?.nodes[nodeId]?.images?.[index];
+    if (!current || !imageId) return;
+    setImagePreview({ mapId: current.documentId, imageId, label: `${current.nodes[nodeId].text}の添付画像${index + 1}` });
+    setModal("image");
+  };
+  const clipboardImages = async (event: React.ClipboardEvent) => {
+    const target = event.target as HTMLElement;
+    if (editingRef.current || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement && !target.classList.contains("node-input")) return;
+    const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith("image/"));
+    if (!files.length) return;
+    event.preventDefault();
+    const id = selectedRef.current[0];
+    if (!id) { setImageError("画像を添付するトピックを選択してください。"); return; }
+    await addImages(id, files);
+  };
   const copy = async () => {
     const current = docRef.current;
     if (!current || !selectedRef.current.length) return;
@@ -492,12 +549,21 @@ export default function App() {
     }
   };
   const paste = async () => {
+    if (imageBusyRef.current) return;
     try {
       let copied = clipboard.current;
       let readCustom = false;
       if (navigator.clipboard?.read) {
         try {
           const items = await navigator.clipboard.read();
+          const imageItem = items.find(item => item.types.some(type => ['image/png', 'image/jpeg', 'image/webp'].includes(type)));
+          if (imageItem && !items.some(item => item.types.includes("web application/x-mindmap+json"))) {
+            const type = imageItem.types.find(type => ['image/png', 'image/jpeg', 'image/webp'].includes(type))!;
+            const target = selectedRef.current[0];
+            if (!target) throw new Error("画像を添付するトピックを選択してください。");
+            await addImages(target, [new File([await imageItem.getType(type)], 'clipboard-image', { type })]);
+            return;
+          }
           for (const item of items) {
             if (!item.types.includes("web application/x-mindmap+json")) continue;
             const value = JSON.parse(await (await item.getType("web application/x-mindmap+json")).text());
@@ -516,12 +582,30 @@ export default function App() {
       if (!copied) throw new Error("先にトピックをコピーしてください");
       const current = docRef.current;
       if (!current) return;
+      const imageIds = [...new Set(Object.values(copied.nodes).flatMap(node => node.images || []))];
+      if (imageIds.length && copied.sourceDocumentId !== current.documentId) {
+        if (!copied.sourceDocumentId) throw new Error("コピー元の画像情報がないため貼り付けられません。元の枝をコピーし直してください。");
+        const sourceId = copied.sourceDocumentId;
+        const prepared = structuredClone(copied);
+        prepared.imageAssets = {};
+        for (const oldId of imageIds) {
+          const response = await fetch(imageURL(sourceId, oldId));
+          if (!response.ok) throw new Error("コピー元の画像を読み込めません。元のマップを確認してください。");
+          const { id: newId, ...metadata } = await uploadImage(current.documentId, await response.blob());
+          prepared.imageAssets[newId] = metadata;
+          for (const node of Object.values(prepared.nodes)) if (node.images) node.images = node.images.map(id => id === oldId ? newId : id);
+        }
+        prepared.sourceDocumentId = current.documentId;
+        copied = prepared;
+      }
+      if (docRef.current?.documentId !== current.documentId) throw new Error("貼り付け先のマップが変わりました。貼り付けをやり直してください。");
+      const beforePaste = docRef.current;
       const result = pasteSubtrees(
-        current,
+        beforePaste,
         selectedRef.current[0] || current.rootId,
         copied,
       );
-      history.current.record(current);
+      history.current.record(beforePaste);
       change(result.document);
       select(result.nodeIds);
     } catch (cause) {
@@ -530,6 +614,7 @@ export default function App() {
   };
   const duplicate = () =>
     attempt(() => {
+      if (imageBusyRef.current) return;
       const current = docRef.current;
       if (!current || !selected[0]) return;
       const result = pasteSubtrees(
@@ -611,29 +696,31 @@ export default function App() {
     reveal(searchResults[index]);
   };
   const exportFile = async (format: "json" | "markdown" | "svg" | "png") => {
+    if (imageBusyRef.current) { setError("画像の取り込みが終わってから書き出してください。"); return; }
     if (!finishEdit()) return;
     const current = docRef.current;
     if (!current) return;
     setExporting(true);
     try {
       const name = current.title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 100);
+      const assets = format === "markdown" ? [] : await loadImageAssets(current);
       if (format === "png")
         downloadFile(
-          await exportPNG(current, pngScale, resolvedTheme),
+          await exportPNG(current, pngScale, resolvedTheme, assets),
           `${name}.png`,
         );
       else if (format === "svg")
         downloadFile(
-          exportSVG(current, { theme: resolvedTheme }),
+          exportSVG(current, { theme: resolvedTheme, assets }),
           `${name}.svg`,
           "image/svg+xml",
         );
       else if (format === "json")
-        downloadFile(exportJSON(current), `${name}.json`, "application/json");
+        downloadFile(assets.length ? exportBackupJSON(current, assets) : exportJSON(current), `${name}.json`, "application/json");
       else {
         if (
           !confirm(
-            "Markdownには枝色、文字サイズ、リンクなど一部の情報を保存できません。完全なバックアップにはJSONを使用してください。続けますか？",
+            "Markdownには画像、枝色、文字サイズ、リンクなど一部の情報を保存できません。完全なバックアップにはJSONを使用してください。続けますか？",
           )
         )
           return;
@@ -649,14 +736,17 @@ export default function App() {
   const importFile = async (file: File) => {
     setLoading(true);
     setModal("import");
-    setImportPreview(null);
+    setImportPreview(null); setImportAssets(null);
     try {
-      if (file.size > 10 * 1024 * 1024)
-        throw new Error("ファイルサイズは10MB以内にしてください。");
+      if (file.size > (/\.json$/i.test(file.name) ? 100 : 10) * 1024 * 1024)
+        throw new Error("JSONバックアップは100MB、Markdownは10MB以内にしてください。");
       const text = await file.text();
-      const value = /\.json$/i.test(file.name)
-        ? importJSON(text, { newIdentity: true })
-        : importMarkdown(text, file.name.replace(/\.[^.]+$/, ""));
+      let value: MindmapDocument;
+      if (/\.json$/i.test(file.name)) {
+        const parsed = parseBackupJSON(text);
+        if (JSON.parse(text).format === 'mindmap-backup') { value = parsed.document; setImportAssets(parsed.assets); }
+        else value = importJSON(text, { newIdentity: true });
+      } else value = importMarkdown(text, file.name.replace(/\.[^.]+$/, ""));
       validateDocument(value);
       setImportPreview(value);
       setError("");
@@ -677,9 +767,11 @@ export default function App() {
         throw new Error(
           "現在のマップが未保存です。保存を再試行するかJSONを保存してください。",
         );
-      await request("/api/maps", "POST", importPreview);
+      const created = importAssets !== null
+        ? await request<MindmapDocument>("/api/maps/import", "POST", { format: "mindmap-backup", schemaVersion: 1, document: importPreview, assets: importAssets })
+        : await request<MindmapDocument>("/api/maps", "POST", importPreview);
       fitAfterOpen.current = true;
-      openDocument(importPreview);
+      openDocument(created);
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -810,7 +902,7 @@ export default function App() {
     location.hash = "";
   };
   return (
-    <div className="app">
+    <div className="app" onPaste={event => void clipboardImages(event)}>
       <input
         ref={fileRef}
         type="file"
@@ -821,6 +913,7 @@ export default function App() {
           if (event.target.files?.[0]) void importFile(event.target.files[0]);
         }}
       />
+      <input ref={imageFileRef} type="file" accept="image/png,image/jpeg,image/webp" multiple className="visually-hidden" aria-label="ノードに添付する画像" onChange={event => { const files = Array.from(event.target.files || []); const id = selectedRef.current[0]; if (id) void addImages(id, files); else setImageError("画像を添付するトピックを選択してください。"); }} />
       {!doc ? (
         <main className="library">
           <header className="library-header">
@@ -1101,6 +1194,7 @@ export default function App() {
             >
               削除
             </button>
+            <button aria-label="画像を添付" disabled={imageBusy || selected.length !== 1} onClick={() => imageFileRef.current?.click()}>▧ 画像</button>
             <div className="header-spacer" />
             <button
               onClick={toggleOutline}
@@ -1111,6 +1205,8 @@ export default function App() {
             <button onClick={() => void showRecovery()}>復旧</button>
             <button onClick={() => fileRef.current?.click()}>読み込む</button>
           </div>
+          {imageBusy && <div className="image-progress" role="status">画像を取り込んでいます… 元のファイルへの参照は保存しません。</div>}
+          {imageError && <div className="error-banner" role="alert">{imageError}{imageRetry.current && <button onClick={() => { const retry = imageRetry.current; if (retry) void addImages(retry.nodeId, retry.files); }}>画像の取り込みを再試行</button>}<button aria-label="画像エラーを閉じる" onClick={() => setImageError("")}>×</button></div>}
           {autosave.status === "failed" && (
             <div className="error-banner" role="alert">
               <div>
@@ -1173,6 +1269,8 @@ export default function App() {
                 onFinishEdit={finishEdit}
                 onCancelEdit={cancelEdit}
                 onAdd={add}
+                onImageFiles={(id, files) => void addImages(id, files)}
+                onImageOpen={openImage}
                 onMove={(id, parentId, beforeId) =>
                   attempt(() =>
                     commit({ type: "MoveSubtree", id, parentId, beforeId }),
@@ -1456,6 +1554,7 @@ export default function App() {
                         />
                       </label>
                     </section>
+                    <section className="image-inspector"><h3>画像</h3><button className="wide" disabled={imageBusy || selected.length !== 1} onClick={() => imageFileRef.current?.click()}>画像を選択して添付</button><p className="field-hint">PNG・JPEG・WebP、1枚10MBまで。画像の貼り付けとノードへのドロップも使えます。元の場所に依存せず保存します。</p>{selectedNode.images?.map((id, index) => <div className="image-inspector-item" key={id}><button className="attachment-thumb" aria-label={`添付画像${index + 1}を拡大`} onClick={() => openImage(selectedNode.id, index)}><img src={imageURL(doc.documentId, id)} alt={`添付画像${index + 1}`} /></button><button aria-label={`添付画像${index + 1}を外す`} onClick={() => attempt(() => commit({ type: "DetachImage", id: selectedNode.id, assetId: id }))}>外す</button></div>)}</section>
                     {selectedNode.childIds.length > 0 && (
                       <button
                         className="wide"
@@ -1546,7 +1645,7 @@ export default function App() {
             role="dialog"
             aria-modal="true"
             aria-label={
-              modal === "help"
+              modal === "image" ? "添付画像の拡大表示" : modal === "help"
                 ? "操作ガイド"
                 : modal === "export"
                   ? "書き出し"
@@ -1554,11 +1653,11 @@ export default function App() {
                     ? "保存内容の復旧"
                     : "読み込みプレビュー"
             }
-            className="modal"
+            className={`modal ${modal === "image" ? "image-modal" : ""}`}
           >
             <div className="panel-heading">
               <h2>
-                {modal === "help"
+                {modal === "image" ? "添付画像" : modal === "help"
                   ? "操作ガイド"
                   : modal === "export"
                     ? "マップを書き出す"
@@ -1574,7 +1673,7 @@ export default function App() {
                 ×
               </button>
             </div>
-            {modal === "help" ? (
+            {modal === "image" && imagePreview ? <><ImagePreview key={imagePreview.imageId} mapId={imagePreview.mapId} imageId={imagePreview.imageId} label={imagePreview.label} /><p className="muted">画像データはアプリ内に保存されています。</p></> : modal === "help" ? (
               <Help />
             ) : modal === "export" ? (
               <div className="export-options">
@@ -1630,7 +1729,7 @@ export default function App() {
                 ) : importPreview ? (
                   <>
                     <h3>{importPreview.title}</h3>
-                    <p>{Object.keys(importPreview.nodes).length} トピック</p>
+                    <p>{Object.keys(importPreview.nodes).length} トピック · {importAssets?.length || 0} 画像{importAssets?.length ? ` · ${(importAssets.reduce((sum, asset) => sum + asset.byteSize, 0) / 1024).toFixed(1)} KB` : ""}</p>
                     <div className="import-tree">
                       {Object.values(importPreview.nodes)
                         .slice(0, 12)

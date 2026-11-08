@@ -14,6 +14,7 @@
 | tsx | 4.23.15 | privatenumber / OSS | MIT | 2026-09-20 |
 | Playwright | 1.65.0 | Microsoft | Apache-2.0 | 2026-11-05 |
 | Vite React plugin | 5.2.0 | Viteチーム | MIT | 2026-03-12 |
+| sharp | 0.35.5 | Lovell Fuller・OSS | Apache-2.0（libvipsはLGPL-2.1） | 未記録 |
 | Node.js / node:sqlite | 26系 | OpenJS Foundation・Node.jsプロジェクト | MITほか同梱ライセンス | 実行環境による |
 
 Reactは[公式チーム](https://react.dev/community/team)、Viteは[公式チーム](https://vite.dev/team)と[VoidZero](https://voidzero.dev/about)、Node.jsは[ガバナンス](https://nodejs.org/en/about/governance)を管理主体の根拠にしています。Viteの国際チームにはさまざまな背景の貢献者がいますが、Viteを外部サービスとして利用する構成ではありません。tsxは[公式リポジトリ](https://github.com/privatenumber/tsx)を公開するOSSで、運営企業や個人の国籍は断定していません。仕様が避ける外部SaaSへの依存には当たりません。
@@ -27,3 +28,5 @@ Reactは[公式チーム](https://react.dev/community/team)、Viteは[公式チ�
 ## 開発時の情報保護ツール
 
 Gitleaks 8.30.1（Gitleaks OSS、MIT）とpre-commit 4.7.0（pre-commit OSS、MIT）を開発環境の検査に使う。いずれもアプリの実行時依存や外部SaaSではない。pre-commitは公式PyPI配布をuv toolで導入し、版を /path/to/web-mindmap/requirements-security.txt に記録した。Gitleaksはホストの既存導入を利用し、CIは公式配布物と固定SHA256を使う。公式の保守方針・導入・検査の限界は /path/to/web-mindmap/docs/security.md にまとめた。
+
+画像の取り込みは[sharp公式プロジェクト](https://github.com/lovell/sharp)を使い、デコード制限、向きの補正、メタデータ除去をローカルで行います。画像の保存方法、制限と検証範囲は[ノード画像の設計](node-images.md)を参照してください。

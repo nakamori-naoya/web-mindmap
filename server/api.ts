@@ -1,17 +1,30 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { MapStore, StoreError } from './store.ts';
+import { ImageError, MAX_IMAGE_UPLOAD_BYTES, MAX_BACKUP_BYTES } from './images.ts';
 const MAX_BYTES = 10 * 1024 * 1024;
-export async function readBody(req: IncomingMessage): Promise<unknown> {
+async function readBytes(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  const length = Number(req.headers['content-length']);
+  if (Number.isFinite(length) && length > maxBytes) throw new StoreError(413, 'ファイルが取り込み上限を超えています。');
+  return new Promise<Buffer>((resolve, reject) => {
+    const parts: Buffer[] = []; let bytes = 0; let failed = false;
+    req.on('data', (part: Buffer) => {
+      if (failed) return;
+      bytes += part.length;
+      if (bytes > maxBytes) { failed = true; parts.length = 0; reject(new StoreError(413, 'ファイルが取り込み上限を超えています。')); }
+      else parts.push(part);
+    });
+    req.on('end', () => { if (!failed) resolve(Buffer.concat(parts)); });
+    req.on('error', () => { if (!failed) { failed = true; reject(new StoreError(400, '読み込み中に通信が切れました。')); } });
+    req.on('aborted', () => { if (!failed) { failed = true; reject(new StoreError(400, '読み込みが中断されました。')); } });
+  });
+}
+async function readJSONText(req: IncomingMessage, maxBytes = MAX_BYTES): Promise<string> {
   if (!req.headers['content-type']?.toLowerCase().startsWith('application/json')) throw new StoreError(415, 'Content-Typeはapplication/jsonを指定してください。');
-  if (Number(req.headers['content-length']) > MAX_BYTES) throw new StoreError(413, 'ファイルは10MB以内にしてください。');
-  const parts: Buffer[] = []; let length = 0;
-  for await (const part of req) {
-    const chunk = Buffer.from(part); length += chunk.length;
-    if (length > MAX_BYTES) throw new StoreError(413, 'ファイルは10MB以内にしてください。');
-    parts.push(chunk);
-  }
-  try { return JSON.parse(Buffer.concat(parts).toString('utf8')); }
-  catch { throw new StoreError(400, 'JSONが壊れています。'); }
+  return (await readBytes(req, maxBytes)).toString('utf8');
+}
+export async function readBody(req: IncomingMessage): Promise<unknown> {
+  const text = await readJSONText(req);
+  try { return JSON.parse(text); } catch { throw new StoreError(400, 'JSONが壊れています。'); }
 }
 export function json(res: ServerResponse, status: number, value?: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -40,7 +53,21 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, store
     if (parts[1] === 'health' && req.method === 'GET') { json(res, 200, { ok: true }); return true; }
     if (parts[1] !== 'maps') throw new StoreError(404, 'APIが見つかりません。');
     const id = parts[2]; const action = parts[3]; const snapshotId = parts[4];
-    if (!id && req.method === 'GET') json(res, 200, store.list(url.searchParams.get('trash') === '1'));
+    if (parts.length > 6 || parts.some(part => !part || part.includes('\\') || part === '.' || part === '..')) throw new StoreError(404, 'APIが見つかりません。');
+    if (id === 'import' && !action && req.method === 'POST') json(res, 201, await store.importBackup(await readJSONText(req, MAX_BACKUP_BYTES)));
+    else if (id && action === 'images' && !parts[4] && req.method === 'POST') {
+      const contentType = req.headers['content-type'] || '';
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(contentType.split(';')[0].trim().toLowerCase())) throw new ImageError(415, '画像はPNG・JPEG・WebPの静止画を選んでください。');
+      json(res, 201, await store.uploadImage(id, await readBytes(req, MAX_IMAGE_UPLOAD_BYTES), contentType));
+    }
+    else if (id && action === 'images' && !parts[4] && req.method === 'GET') json(res, 200, store.imageMetadata(id));
+    else if (id && action === 'images' && parts[4] && !parts[5] && req.method === 'GET') {
+      const image = store.image(id, parts[4]);
+      res.writeHead(200, { 'Content-Type': 'image/webp', 'Content-Length': Number(image.byteSize), 'Cache-Control': 'no-store', 'Content-Disposition': `inline; filename="${image.id}.webp"` });
+      res.end(image.data as Uint8Array);
+    }
+    else if (id && action === 'backup' && !parts[4] && req.method === 'GET') json(res, 200, store.exportBackup(id));
+    else if (!id && req.method === 'GET') json(res, 200, store.list(url.searchParams.get('trash') === '1'));
     else if (!id && req.method === 'POST') json(res, 201, await store.create(await readBody(req)));
     else if (id && !action && req.method === 'GET') json(res, 200, store.get(id, url.searchParams.get('trash') === '1'));
     else if (id && !action && req.method === 'PUT') json(res, 200, await store.save(id, await readBody(req)));
@@ -58,6 +85,6 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, store
 }
 export function apiError(res: ServerResponse, error: unknown) {
   if (res.headersSent || res.destroyed) return;
-  if (error instanceof StoreError) json(res, error.status, { error: error.message });
+  if (error instanceof StoreError || error instanceof ImageError) json(res, error.status, { error: error.message });
   else { console.error(error); json(res, 503, { error: '保存または読み込みに失敗しました。未保存の内容をJSONで退避してから再試行してください。' }); }
 }

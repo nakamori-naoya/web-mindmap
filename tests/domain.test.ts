@@ -48,7 +48,7 @@ test('破損した親子・到達不能・不正リンク・未知版・不正�
     (document: any) => document.nodes[document.rootId].childIds.push(a.nodeId),
     (document: any) => document.nodes[document.rootId].childIds = [],
     (document: any) => document.nodes[a.nodeId].link = 'javascript:alert(1)',
-    (document: any) => document.schemaVersion = 2,
+    (document: any) => document.schemaVersion = 99,
     (document: any) => document.viewState.camera.zoom = Infinity,
     (document: any) => document.nodes[a.nodeId].style = { branchColor: 'red"/>' },
   ]) { const document = structuredClone(a.document); mutate(document); assert.throws(() => validateDocument(document)); }

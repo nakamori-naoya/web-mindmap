@@ -31,3 +31,20 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm audit --audit-level=high
+      - name: Verify packaged Docker runtime without network or host data
+        shell: bash
+        run: |
+          image="web-mindmap-ci:${GITHUB_SHA}"
+          name="web-mindmap-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker build --tag "$image" .
+          task_container=$(docker create --network none --name "$name" "$image")
+          trap 'docker rm --force "$task_container" >/dev/null 2>&1 || true' EXIT
+          docker start "$task_container" >/dev/null
+          for attempt in $(seq 1 30); do
+            if docker exec "$task_container" node -e "fetch('http://127.0.0.1:4173/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$task_container"
+          exit 1

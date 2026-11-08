@@ -8,6 +8,7 @@ import {
 } from "react";
 import { getDescendantIds, type Camera, type MindmapDocument } from "../domain";
 import { clearMeasurementCache, layoutDocument } from "../layout";
+import { NodeImage } from "./NodeImage";
 export type Editing = {
   id: string;
   draft: string;
@@ -27,6 +28,8 @@ type Props = {
   onMove(id: string, parentId: string, beforeId?: string): void;
   onCamera(camera: Camera): void;
   onToggle(id: string): void;
+  onImageFiles(id: string, files: File[]): void;
+  onImageOpen(id: string, index: number): void;
   onKey(event: ReactKeyboardEvent): void;
   onContextAction(
     action:
@@ -98,7 +101,7 @@ export default function MapCanvas(props: Props) {
     const left = node.x * camera.zoom + camera.x;
     const top = node.y * camera.zoom + camera.y;
     const right = left + node.width * camera.zoom;
-    const bottom = top + node.height * camera.zoom;
+    const bottom = top + node.textHeight * camera.zoom;
     const dx =
       node.width * camera.zoom > canvas.clientWidth - 32
         ? 16 - left
@@ -388,6 +391,8 @@ export default function MapCanvas(props: Props) {
       onPointerMove={move}
       onPointerUp={finish}
       onPointerCancel={() => updateGesture(null)}
+      onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
+      onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); if (selected[0]) props.onImageFiles(selected[0], Array.from(event.dataTransfer.files)); } }}
     >
       <div className="canvas-grid" />
       {menu && (
@@ -463,7 +468,7 @@ export default function MapCanvas(props: Props) {
           return (
             <div
               key={node.id}
-              className={`topic ${node.id === doc.rootId ? "root-topic" : ""} ${isSelected ? "selected" : ""} ${target ? `drop-${target}` : ""} ${gesture?.moved && gesture.id === node.id ? "drag-origin" : ""}`}
+              className={`topic ${node.images?.length ? "has-images" : ""} ${node.id === doc.rootId ? "root-topic" : ""} ${isSelected ? "selected" : ""} ${target ? `drop-${target}` : ""} ${gesture?.moved && gesture.id === node.id ? "drag-origin" : ""}`}
               data-node-id={node.id}
               data-side={position.side}
               style={
@@ -481,6 +486,8 @@ export default function MapCanvas(props: Props) {
                 begin(event, node.id);
               }}
               onDoubleClick={() => props.onStartEdit(node.id)}
+              onDragOver={event => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); event.stopPropagation(); } }}
+              onDrop={event => { if (event.dataTransfer.files.length) { event.preventDefault(); event.stopPropagation(); props.onImageFiles(node.id, Array.from(event.dataTransfer.files)); } }}
               onContextMenu={(event) => {
                 event.preventDefault();
                 if (editing && !props.onFinishEdit()) return;
@@ -504,7 +511,7 @@ export default function MapCanvas(props: Props) {
                   style={
                     isEditing
                       ? {
-                          maxHeight: editingMaximumHeight - 18,
+                          maxHeight: Math.max(32, Math.min(editingMaximumHeight - 18, position.textHeight - 16)),
                           overflowY: "auto",
                         }
                       : undefined
@@ -576,6 +583,7 @@ export default function MapCanvas(props: Props) {
               ) : (
                 <div className="node-text">{node.text}</div>
               )}
+              {position.images?.map((attachment, index) => <div key={attachment.id} className="node-attachment" style={{ position: "absolute", left: attachment.x, top: attachment.y, width: attachment.width, height: attachment.height }}><NodeImage mapId={doc.documentId} imageId={attachment.id} label={`${node.text}の添付画像${index + 1}`} onOpen={() => props.onImageOpen(node.id, index)} /></div>)}
               {node.link && (
                 <a
                   className="node-link"

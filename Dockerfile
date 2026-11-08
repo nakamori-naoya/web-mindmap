@@ -13,6 +13,8 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/src/domain ./src/domain
+COPY --from=build /app/src/io ./src/io
+COPY --from=build /app/src/layout ./src/layout
 COPY --from=build /app/scripts ./scripts
 EXPOSE 4173
 CMD ["node", "--import", "tsx", "server/main.ts"]

@@ -4,12 +4,15 @@ import {
   type MindmapDocument,
   type Side,
 } from "../domain/index";
+export type LayoutImage = { id: string; x: number; y: number; width: number; height: number };
 export type LayoutNode = {
   id: string;
   x: number;
   y: number;
   width: number;
   height: number;
+  textHeight: number;
+  images: LayoutImage[];
   lines: string[];
   side: Side;
   color: string;
@@ -101,6 +104,8 @@ export function layoutDocument(
       width: number;
       height: number;
       lines: string[];
+      textHeight: number;
+      images: LayoutImage[];
       fontSize: number;
       span: number;
       descendants: number;
@@ -120,19 +125,31 @@ export function layoutDocument(
       maxWidth - inset,
       measure,
     );
+    const referencedImages = (node.images || []).map(id => ({ id, metadata: document.imageAssets![id] }));
+    const imageMinimumWidth = referencedImages.length ? Math.min(maxWidth, Math.max(200, ...referencedImages.map(image => image.metadata.width)) + inset) : 0;
     const width = Math.ceil(
       Math.max(
         80,
+        imageMinimumWidth,
         Math.min(
           maxWidth,
           Math.max(...lines.map((line) => measure(line, fontSize)), 0) + inset,
         ),
       ),
     );
-    const height = Math.min(
+    const textHeight = Math.min(
       Math.ceil(lines.length * fontSize * 1.5 + 16 + border),
       options.maximumNodeHeights?.[id] ?? Infinity,
     );
+    let imageY = textHeight;
+    const images = referencedImages.map(({ id, metadata }) => {
+      const scale = Math.min(1, (width - inset) / metadata.width, 180 / metadata.height);
+      const imageWidth = metadata.width * scale; const imageHeight = metadata.height * scale;
+      const image = { id, x: (width - imageWidth) / 2, y: imageY, width: imageWidth, height: imageHeight };
+      imageY += imageHeight + 8;
+      return image;
+    });
+    const height = images.length ? imageY : textHeight;
     let descendants = 0;
     let childHeight = 0;
     for (const childId of node.childIds) {
@@ -143,7 +160,7 @@ export function layoutDocument(
     if (node.childIds.length > 1)
       childHeight += (node.childIds.length - 1) * verticalGap;
     const span = collapsed.has(id) ? height : Math.max(height, childHeight);
-    sizes.set(id, { width, height, lines, fontSize, span, descendants });
+    sizes.set(id, { width, height, textHeight, images, lines, fontSize, span, descendants });
     return span;
   };
   calculate(document.rootId);
@@ -179,6 +196,8 @@ export function layoutDocument(
       y: centerY - size.height / 2,
       width: size.width,
       height: size.height,
+      textHeight: size.textHeight,
+      images: size.images,
       lines: size.lines,
       fontSize: size.fontSize,
       side,

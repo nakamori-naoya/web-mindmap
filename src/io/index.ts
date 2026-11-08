@@ -1,6 +1,14 @@
-import { createDocument, validateDocument, DocumentError, MAX_DOCUMENT_BYTES, MAX_NODES, MAX_DEPTH, BRANCH_COLORS, type MindmapDocument, type MindmapNode } from '../domain/index';
+import { createDocument, validateDocument, DocumentError, MAX_DOCUMENT_BYTES, MAX_NODES, MAX_DEPTH, BRANCH_COLORS, type MindmapDocument, type MindmapNode, type ImageAssetMetadata, validateImageMetadata, getReferencedImageIds, MAX_IMAGE_ASSETS, MAX_MAP_IMAGE_BYTES } from '../domain/index';
 import { layoutDocument } from '../layout/index';
-export function exportJSON(document: MindmapDocument): string { validateDocument(document); return JSON.stringify(document); }
+export type PortableImageAsset = ImageAssetMetadata & { id: string; dataBase64: string };
+export type PortableBackup = { format: 'mindmap-backup'; schemaVersion: 1; document: MindmapDocument; assets: PortableImageAsset[] };
+export const MAX_BACKUP_BYTES = 100 * 1024 * 1024;
+export function exportJSON(document: MindmapDocument): string {
+  validateDocument(document);
+  if (getReferencedImageIds(document).length) throw new DocumentError('画像を含むマップは画像付きJSONバックアップで保存してください。');
+  const copy = structuredClone(document); if (copy.imageAssets) copy.imageAssets = {};
+  return JSON.stringify(copy);
+}
 function checkSize(text: string) { if (new TextEncoder().encode(text).byteLength > MAX_DOCUMENT_BYTES) throw new DocumentError('ファイルサイズは10MB以内にしてください。'); }
 function rejectDuplicateKeys(text: string) {
   let position = 0;
@@ -35,10 +43,71 @@ function rejectDuplicateKeys(text: string) {
   };
   value(0); whitespace(); if (position !== text.length) throw new DocumentError('JSONの末尾に余分な内容があります。');
 }
+function backupDocument(document: MindmapDocument): MindmapDocument {
+  const copy = structuredClone(document);
+  if (copy.imageAssets) copy.imageAssets = Object.fromEntries(getReferencedImageIds(copy).map(id => [id, copy.imageAssets![id]]));
+  return copy;
+}
+function checkedAssets(document: MindmapDocument, value: unknown, exact = false): PortableImageAsset[] {
+  if (!Array.isArray(value) || value.length > MAX_IMAGE_ASSETS) throw new DocumentError('画像バックアップは200件以内にしてください。');
+  const ids = new Set<string>(); let totalBytes = 0;
+  for (const asset of value) {
+    if (!asset || typeof asset !== 'object' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(asset.id) || ids.has(asset.id)) throw new DocumentError('画像IDが不正、または重複しています。');
+    if (Object.keys(asset).some(key => !['id', 'mime', 'width', 'height', 'byteSize', 'dataBase64'].includes(key))) throw new DocumentError('画像バックアップに対応しない項目があります。');
+    const metadata = { mime: asset.mime, width: asset.width, height: asset.height, byteSize: asset.byteSize };
+    validateImageMetadata(metadata);
+    if (typeof asset.dataBase64 !== 'string' || !asset.dataBase64.length || asset.dataBase64.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(asset.dataBase64)) throw new DocumentError('画像のBase64データが不正です。');
+    const padding = asset.dataBase64.endsWith('==') ? 2 : asset.dataBase64.endsWith('=') ? 1 : 0;
+    const bytes = asset.dataBase64.length / 4 * 3 - padding;
+    if (bytes !== asset.byteSize) throw new DocumentError('画像のデータ長と保存情報が一致しません。');
+    const expected = document.imageAssets?.[asset.id];
+    if (!expected || expected.mime !== metadata.mime || expected.width !== metadata.width || expected.height !== metadata.height || expected.byteSize !== metadata.byteSize) throw new DocumentError('画像の保存情報が文書と一致しません。');
+    ids.add(asset.id); totalBytes += bytes;
+  }
+  if (totalBytes > MAX_MAP_IMAGE_BYTES) throw new DocumentError('画像の合計は64MiB以内にしてください。');
+  const referenced = getReferencedImageIds(document);
+  if (referenced.some(id => !ids.has(id))) throw new DocumentError('画像の実体が不足しています。画像付きバックアップを使ってください。');
+  if (exact && (ids.size !== referenced.length || Object.keys(document.imageAssets || {}).some(id => !ids.has(id)))) throw new DocumentError('画像バックアップの参照と実体が一致しません。');
+  return value as PortableImageAsset[];
+}
+export function exportBackupJSON(document: MindmapDocument, assets: PortableImageAsset[]): string {
+  validateDocument(document);
+  const copy = backupDocument(document);
+  const referenced = new Set(getReferencedImageIds(copy));
+  const selected = assets.filter(asset => referenced.has(asset.id));
+  checkedAssets(copy, selected, true);
+  const serialized = JSON.stringify({ format: 'mindmap-backup', schemaVersion: 1, document: copy, assets: selected } satisfies PortableBackup);
+  if (new TextEncoder().encode(serialized).byteLength > MAX_BACKUP_BYTES) throw new DocumentError('画像付きバックアップは100MiB以内にしてください。');
+  return serialized;
+}
+export function parseBackupJSON(text: string): { document: MindmapDocument; assets: PortableImageAsset[] } {
+  if (new TextEncoder().encode(text).byteLength > MAX_BACKUP_BYTES) throw new DocumentError('画像付きバックアップは100MiB以内にしてください。');
+  try {
+    rejectDuplicateKeys(text);
+    const value: unknown = JSON.parse(text);
+    if (value && typeof value === 'object' && 'format' in value && value.format === 'mindmap-backup') {
+      const backup = value as PortableBackup;
+      if (backup.schemaVersion !== 1) throw new DocumentError('対応外の画像バックアップバージョンです。');
+      validateDocument(backup.document);
+      checkedAssets(backup.document, backup.assets, true);
+      return structuredClone({ document: backup.document, assets: backup.assets });
+    }
+    const document = importJSON(text, { newIdentity: false });
+    return { document, assets: [] };
+  } catch (error) {
+    if (error instanceof DocumentError) throw error;
+    throw new DocumentError('JSONバックアップが破損しています。元のマップは変更されません。');
+  }
+}
+function embeddedImages(document: MindmapDocument, assets: PortableImageAsset[] = []): Map<string, string> {
+  checkedAssets(document, assets);
+  return new Map(assets.map(asset => [asset.id, `data:image/webp;base64,${asset.dataBase64}`]));
+}
 export function importJSON(text: string, options: { newIdentity?: boolean } = {}): MindmapDocument {
   checkSize(text);
   try {
     rejectDuplicateKeys(text); const value: unknown = JSON.parse(text); validateDocument(value);
+    if (getReferencedImageIds(value).length || Object.keys(value.imageAssets || {}).length) throw new DocumentError('画像の実体がない文書です。画像付きJSONバックアップを読み込んでください。');
     const document = structuredClone(value);
     if (options.newIdentity !== false) { const now = new Date().toISOString(); document.documentId = crypto.randomUUID(); document.revision = 0; document.createdAt = now; document.updatedAt = now; }
     return document;
@@ -81,7 +150,7 @@ export function importMarkdown(text: string, filename = 'インポートした�
   }
   validateDocument(document); return document;
 }
-export const MARKDOWN_EXPORT_WARNING = 'Markdownでは枝色・文字サイズ・折り畳み・カメラ位置・リンク欄を保持できません。完全なバックアップにはJSONを使ってください。';
+export const MARKDOWN_EXPORT_WARNING = 'Markdownでは枝色・文字サイズ・折り畳み・カメラ位置・リンク欄・添付画像を保持できません。完全なバックアップにはJSONを使ってください。';
 export function exportMarkdown(document: MindmapDocument): string {
   const root = document.nodes[document.rootId]; const lines = [`# ${root.text.replace(/\n/g, ' ')}`, ''];
   if (root.note) lines.push(root.note, '');
@@ -96,13 +165,13 @@ export function exportMarkdown(document: MindmapDocument): string {
 }
 function escapeXML(text: string) { return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[character]!)); }
 export type ExportTheme = 'dark' | 'light';
-export function exportSVG(document: MindmapDocument, options: { theme?: ExportTheme; scale?: number } = {}): string {
-  validateDocument(document); const layout = layoutDocument(document, { includeCollapsed: true }); const padding = 64;
+export function exportSVG(document: MindmapDocument, options: { theme?: ExportTheme; scale?: number; assets?: PortableImageAsset[] } = {}): string {
+  validateDocument(document); const imageURLs = embeddedImages(document, options.assets); const layout = layoutDocument(document, { includeCollapsed: true }); const padding = 64;
   const background = options.theme === 'light' ? '#F3F6FA' : '#20252B'; const panel = options.theme === 'light' ? '#FFFFFF' : '#2B323A'; const foreground = options.theme === 'light' ? '#172331' : '#F2F5F8';
   const width = Math.ceil(layout.bounds.width + padding * 2); const height = Math.ceil(layout.bounds.height + padding * 2);
   const offsetX = padding - layout.bounds.x; const offsetY = padding - layout.bounds.y;
   const curves = layout.edges.map(edge => `<path d="${edge.path}" fill="none" stroke="${edge.color}" stroke-width="2.5"/>`).join('');
-  const topics = layout.nodes.map(node => `<g transform="translate(${node.x},${node.y})"><rect width="${node.width}" height="${node.height}" rx="10" fill="${panel}" stroke="${node.color}" stroke-width="1.5"/><text fill="${foreground}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Noto Sans JP,sans-serif" font-size="${node.fontSize}">${node.lines.map((line, index) => `<tspan x="12" y="${8 + node.fontSize * 1.15 + index * node.fontSize * 1.5}">${escapeXML(line)}</tspan>`).join('')}</text></g>`).join('');
+  const topics = layout.nodes.map(node => `<g transform="translate(${node.x},${node.y})"><rect width="${node.width}" height="${node.height}" rx="10" fill="${panel}" stroke="${node.color}" stroke-width="1.5"/><text fill="${foreground}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Noto Sans JP,sans-serif" font-size="${node.fontSize}">${node.lines.map((line, index) => `<tspan x="12" y="${8 + node.fontSize * 1.15 + index * node.fontSize * 1.5}">${escapeXML(line)}</tspan>`).join('')}</text>${node.images.map(image => `<image x="${image.x}" y="${image.y}" width="${image.width}" height="${image.height}" href="${imageURLs.get(image.id)}" preserveAspectRatio="xMidYMid meet"/>`).join('')}</g>`).join('');
   const scale = options.scale || 1;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width * scale}" height="${height * scale}" viewBox="0 0 ${width} ${height}"><title>${escapeXML(document.title)}</title><rect width="${width}" height="${height}" fill="${background}"/><g transform="translate(${offsetX},${offsetY})">${curves}${topics}</g></svg>`;
 }
@@ -112,10 +181,10 @@ export function exportImageSize(document: MindmapDocument, scale = 1) {
   const actualScale = Math.min(scale, 4096 / width, 4096 / height);
   return { width: Math.max(1, Math.floor(width * actualScale)), height: Math.max(1, Math.floor(height * actualScale)), reduced: actualScale < scale };
 }
-export async function exportPNG(document: MindmapDocument, scale = 1, theme: ExportTheme = 'dark'): Promise<Blob> {
+export async function exportPNG(document: MindmapDocument, scale = 1, theme: ExportTheme = 'dark', assets: PortableImageAsset[] = []): Promise<Blob> {
   if (typeof window === 'undefined') throw new DocumentError('PNG画像出力はブラウザから利用してください。');
   await globalThis.document.fonts?.ready;
-  const svg = exportSVG(document, { theme }); const size = exportImageSize(document, scale);
+  const svg = exportSVG(document, { theme, assets }); const size = exportImageSize(document, scale);
   const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
   try {
     const image = new Image(); image.src = url; await image.decode();
