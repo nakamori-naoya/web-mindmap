@@ -1,0 +1,109 @@
+{
+  "checkedAt": "2026-11-08",
+  "packages": {
+    "react": {
+      "version": "19.3.1",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/react/react.git",
+        "directory": "packages/react"
+      },
+      "publishedAt": "2026-10-14T16:47:15.290Z",
+      "registryModifiedAt": "2026-11-06T16:19:15.989Z"
+    },
+    "react-dom": {
+      "version": "19.3.1",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/react/react.git",
+        "directory": "packages/react-dom"
+      },
+      "publishedAt": "2026-10-14T16:49:10.081Z",
+      "registryModifiedAt": "2026-11-06T16:19:52.373Z"
+    },
+    "vite": {
+      "version": "7.3.7",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "git+https://github.com/vitejs/vite.git",
+        "directory": "packages/vite"
+      },
+      "publishedAt": "2026-10-06T05:11:19.017Z",
+      "registryModifiedAt": "2026-11-05T05:40:52.541Z"
+    },
+    "typescript": {
+      "version": "5.9.3",
+      "license": "Apache-2.0",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/microsoft/TypeScript.git"
+      },
+      "publishedAt": "2025-09-30T21:19:38.784Z",
+      "registryModifiedAt": "2026-11-07T08:11:07.061Z"
+    },
+    "tsx": {
+      "version": "4.23.15",
+      "license": "MIT",
+      "repository": "privatenumber/tsx",
+      "publishedAt": "2026-09-20T07:22:17.792Z",
+      "registryModifiedAt": "2026-09-20T07:22:18.060Z"
+    },
+    "@playwright/test": {
+      "version": "1.65.0",
+      "license": "Apache-2.0",
+      "repository": {
+        "type": "git",
+        "url": "git+https://github.com/microsoft/playwright.git"
+      },
+      "publishedAt": "2026-11-05T18:30:18.050Z",
+      "registryModifiedAt": "2026-11-07T05:15:16.947Z"
+    },
+    "@vitejs/plugin-react": {
+      "version": "5.2.0",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "git+https://github.com/vitejs/vite-plugin-react.git",
+        "directory": "packages/plugin-react"
+      },
+      "publishedAt": "2026-03-12T14:27:45.817Z",
+      "registryModifiedAt": "2026-11-02T09:18:17.012Z"
+    },
+    "@types/node": {
+      "version": "24.19.2",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+        "directory": "types/node"
+      },
+      "publishedAt": "2026-10-09T18:44:25.189Z",
+      "registryModifiedAt": "2026-10-28T18:36:37.419Z"
+    },
+    "@types/react": {
+      "version": "19.3.0",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+        "directory": "types/react"
+      },
+      "publishedAt": "2026-09-09T18:08:49.750Z",
+      "registryModifiedAt": "2026-10-04T09:18:58.831Z"
+    },
+    "@types/react-dom": {
+      "version": "19.3.0",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+        "directory": "types/react-dom"
+      },
+      "publishedAt": "2026-09-09T18:07:51.886Z",
+      "registryModifiedAt": "2026-10-04T09:19:01.470Z"
+    }
+  }
+}

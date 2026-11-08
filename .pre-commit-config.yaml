@@ -1,0 +1,16 @@
+minimum_pre_commit_version: '4.7.0'
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: Gitleaks staged secrets
+        entry: gitleaks git --staged --redact
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: publication-files
+        name: Public repository file and privacy check
+        entry: node scripts/check-publication.mjs --staged
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -1,0 +1,16 @@
+{
+  "checkedAt": "2026-11-08T04:20:00.894Z",
+  "image": "web-mindmap-app:latest",
+  "localDockerContext": "orbstack",
+  "hostBinding": "127.0.0.1:4174",
+  "elapsedMs": 2837,
+  "steps": [
+    "Composeで専用ポート・永続bind mountへ起動",
+    "2マップ保存→コンテナ再起動→同一内容を再読込",
+    "SIGKILLで異常終了→同じコンテナを再起動→保存内容を再読込",
+    "稼働中SQLiteのバックアップAPIでコピー作成",
+    "正常停止→現状退避→バックアップ復元→整合性検査",
+    "復元後再起動→全マップ・日本語メモを比較して一致"
+  ],
+  "result": "passed"
+}

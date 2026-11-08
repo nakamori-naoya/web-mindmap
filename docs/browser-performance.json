@@ -1,0 +1,17 @@
+{
+  "date": "2026-11-08T05:04:59.817Z",
+  "browser": "157.0.8103.38",
+  "mode": "headless Chrome、1440×1000、ローカルVite開発サーバー、Node26",
+  "nodes": 1000,
+  "depth": 10,
+  "displayMs": 198.72279100000014,
+  "addLayoutTwoFramesP95Ms": 40.69999998807907,
+  "panFrameP95Ms": 16.700000000000273,
+  "dragFrameP95Ms": 16.799999999999272,
+  "editSamples": 20,
+  "editNavigation": "各追加後、内向き矢印で親を選び「選択へ移動」で中心へ戻る。追加計測の時間にはこの移動を含めない。",
+  "frameSamples": 69,
+  "dragFrameSamples": 125,
+  "stress5000": "保存API成功、5000トピック表示成功",
+  "limitations": "表示時間はPlaywright待機を含む。追加は二回のrequestAnimationFrameまで。パン/ドラッグはPlaywright mouse入力とrequestAnimationFrame間隔。物理IME・Windows/Edge・Chrome前版は未測定。"
+}
