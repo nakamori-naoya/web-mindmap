@@ -46,7 +46,8 @@ import { useAutosave } from "../editor/useAutosave";
 import { Help } from "./Help";
 import { imageURL, uploadImage, loadImageAssets } from "../editor/imageApi";
 import { ImagePreview } from "../editor/ImagePreview";
-type Modal = "help" | "export" | "recovery" | "import" | "image" | null;
+import { isTrashReviewDue, trashReviewDate } from "../editor/trashRetention";
+type Modal = "help" | "export" | "recovery" | "import" | "image" | "delete" | null;
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : "処理を完了できませんでした。";
 const dateText = (date: string) =>
@@ -62,6 +63,15 @@ export default function App() {
   const docRef = useRef(doc);
   const [maps, setMaps] = useState<MapSummary[]>([]);
   const [trash, setTrash] = useState(false);
+  const [trashMaps, setTrashMaps] = useState<MapSummary[]>([]);
+  const [reviewNow, setReviewNow] = useState(Date.now);
+  const [reviewDeferred, setReviewDeferred] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<MapSummary | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const deleteBusyRef = useRef(false);
+  const dueTrashCount = trashMaps.filter(map => isTrashReviewDue(map.deletedAt, reviewNow)).length;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -161,13 +171,40 @@ export default function App() {
       )
         throw new Error("一覧の応答形式が不正です");
       setMaps(rows);
+      setReviewNow(Date.now());
+      if (showTrash) setTrashMaps(rows);
       setError("");
+      if (!showTrash) {
+        try { setTrashMaps(await request<MapSummary[]>("/api/maps?trash=1")); }
+        catch { setTrashMaps([]); setError("削除確認の対象を取得できませんでした。再読み込みしてください。"); }
+      }
     } catch (cause) {
       setError(errorText(cause));
     } finally {
       setLoading(false);
     }
   };
+  const closeModal = () => { if (!deleteBusyRef.current) setModal(null); };
+  const deleteMap = async () => {
+    if (!deleteTarget || deleteBusyRef.current || deleteConfirmation !== deleteTarget.title) return;
+    deleteBusyRef.current = true;
+    setDeleteBusy(true);
+    setDeleteError("");
+    try {
+      await request(`/api/maps/${deleteTarget.id}/permanent`, "DELETE", { confirmation: deleteConfirmation });
+      setModal(null);
+      setDeleteTarget(null);
+      await loadMaps(true);
+      setNotice("確認したマップを完全削除しました。");
+    } catch (cause) { setDeleteError(errorText(cause) + " 一覧を再読み込みして現在の状態を確認してください。"); }
+    finally { deleteBusyRef.current = false; setDeleteBusy(false); }
+  };
+  useEffect(() => {
+    const timer = window.setInterval(() => setReviewNow(Date.now()), 60_000);
+    const update = () => setReviewNow(Date.now());
+    window.addEventListener("focus", update);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", update); };
+  }, []);
   const openDocument = (value: MindmapDocument, editRoot = false) => {
     validateDocument(value);
     autosave.reset();
@@ -308,7 +345,7 @@ export default function App() {
     const previous = document.activeElement as HTMLElement | null;
     const trap = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setModal(null);
+        closeModal();
         return;
       }
       if (event.key !== "Tab") return;
@@ -964,9 +1001,19 @@ export default function App() {
               ＋ 新しいマップ
             </button>
           </div>
+          {!trash && dueTrashCount > 0 && !reviewDeferred && (
+            <div className="trash-review-notice" role="status">
+              <p>ゴミ箱に移して約30日を過ぎたマップが{dueTrashCount}件あります。完全削除するか確認してください。</p>
+              <p className="muted">確認するまでは保持し、復元できます。保留後も次の起動・再読み込みで案内します。</p>
+              <div className="card-actions">
+                <button onClick={() => { setTrash(true); void loadMaps(true); }}>ゴミ箱で確認</button>
+                <button onClick={() => setReviewDeferred(true)}>今回は保留</button>
+              </div>
+            </div>
+          )}
           {trash && (
             <p className="muted">
-              削除したマップは30日間復元できます。完全削除には確認が必要です。
+              ゴミ箱へ移して約30日後に、完全削除するか確認します。了承するまで自動削除せず、30日後も復元できます。
             </p>
           )}
           {error && (
@@ -991,6 +1038,11 @@ export default function App() {
                   <h2>{map.title}</h2>
                   <p>{dateText(map.updatedAt)} 更新</p>
                 </button>
+                {trash && map.deletedAt && <div className="trash-dates">
+                  <p>ゴミ箱へ移した日：{new Date(map.deletedAt).toLocaleDateString("ja-JP")}</p>
+                  <p>削除確認の目安：{new Date(trashReviewDate(map.deletedAt)).toLocaleDateString("ja-JP")}</p>
+                  {isTrashReviewDue(map.deletedAt, reviewNow) && <p className="trash-review-due">削除確認の目安を過ぎています。保留する場合はそのまま残せます。</p>}
+                </div>}
                 <div className="card-actions">
                   {trash ? (
                     <>
@@ -1011,23 +1063,11 @@ export default function App() {
                       </button>
                       <button
                         className="danger"
-                        onClick={async () => {
-                          if (
-                            !confirm(
-                              `「${map.title}」を完全に削除しますか？ 元に戻せません。`,
-                            )
-                          )
-                            return;
-                          try {
-                            await request(
-                              `/api/maps/${map.id}/permanent`,
-                              "DELETE",
-                              { confirmation: map.title },
-                            );
-                            await loadMaps(true);
-                          } catch (cause) {
-                            setError(errorText(cause));
-                          }
+                        onClick={() => {
+                          setDeleteTarget(map);
+                          setDeleteConfirmation("");
+                          setDeleteError("");
+                          setModal("delete");
                         }}
                       >
                         完全削除
@@ -1637,7 +1677,7 @@ export default function App() {
         <div
           className="modal-backdrop"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setModal(null);
+            if (e.target === e.currentTarget) closeModal();
           }}
         >
           <section
@@ -1645,7 +1685,7 @@ export default function App() {
             role="dialog"
             aria-modal="true"
             aria-label={
-              modal === "image" ? "添付画像の拡大表示" : modal === "help"
+              modal === "delete" ? "マップの完全削除" : modal === "image" ? "添付画像の拡大表示" : modal === "help"
                 ? "操作ガイド"
                 : modal === "export"
                   ? "書き出し"
@@ -1657,7 +1697,7 @@ export default function App() {
           >
             <div className="panel-heading">
               <h2>
-                {modal === "image" ? "添付画像" : modal === "help"
+                {modal === "delete" ? "マップを完全削除する" : modal === "image" ? "添付画像" : modal === "help"
                   ? "操作ガイド"
                   : modal === "export"
                     ? "マップを書き出す"
@@ -1668,12 +1708,25 @@ export default function App() {
               <button
                 autoFocus
                 aria-label="ダイアログを閉じる"
-                onClick={() => setModal(null)}
+                onClick={closeModal}
+                disabled={deleteBusy}
               >
                 ×
               </button>
             </div>
-            {modal === "image" && imagePreview ? <><ImagePreview key={imagePreview.imageId} mapId={imagePreview.mapId} imageId={imagePreview.imageId} label={imagePreview.label} /><p className="muted">画像データはアプリ内に保存されています。</p></> : modal === "help" ? (
+            {modal === "delete" && deleteTarget ? <form onSubmit={event => { event.preventDefault(); void deleteMap(); }}>
+              <p className="delete-target-name">「{deleteTarget.title}」と添付画像・保存版を完全削除します。元に戻せません。</p>
+              <p className="muted">削除する場合は、対象のマップ名をそのまま入力してください。保留するとゴミ箱に残り、復元できます。</p>
+              <p className="muted">既存のバックアップと書き出したファイルは別途保持されます。</p>
+              <label className="delete-name-label">確認のためマップ名を入力
+                <input aria-label="確認のためマップ名を入力" value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} disabled={deleteBusy} autoComplete="off" />
+              </label>
+              {deleteError && <p className="error-banner" role="alert">{deleteError}</p>}
+              <div className="card-actions">
+                <button type="button" onClick={closeModal} disabled={deleteBusy}>今回は保留</button>
+                <button type="submit" className="danger" disabled={deleteBusy || deleteConfirmation !== deleteTarget.title}>{deleteBusy ? "削除中…" : "完全削除する"}</button>
+              </div>
+            </form> : modal === "image" && imagePreview ? <><ImagePreview key={imagePreview.imageId} mapId={imagePreview.mapId} imageId={imagePreview.imageId} label={imagePreview.label} /><p className="muted">画像データはアプリ内に保存されています。</p></> : modal === "help" ? (
               <Help />
             ) : modal === "export" ? (
               <div className="export-options">

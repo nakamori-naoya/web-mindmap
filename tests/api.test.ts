@@ -35,7 +35,14 @@ test('HTTP APIのCRUDとOrigin/Host/破損文書/上限を実接続で検証す�
     assert.equal((await fetch(`${base}/api/maps/${doc.documentId}`, { method: 'DELETE', headers })).status, 204);
     assert.equal((await fetch(`${base}/api/maps/${doc.documentId}`)).status, 404);
     assert.equal((await (await fetch(`${base}/api/maps?trash=1`)).json()).length, 1);
+    store.db.prepare('UPDATE maps SET deleted_at=? WHERE id=?').run(new Date(Date.now() - 31 * 86400000).toISOString(), doc.documentId);
+    const unchanged = await (await fetch(`${base}/api/maps?trash=1`)).json();
+    assert.equal(unchanged.length, 1); // 読み取りは確認期限が過ぎても削除しない。
+    assert.equal((await fetch(`${base}/api/maps/${doc.documentId}/permanent`, { method: 'DELETE', headers, body: JSON.stringify({ confirmation: '別名' }) })).status, 422);
+    assert.equal((await fetch(`${base}/api/maps/${doc.documentId}?trash=1`)).status, 200);
     assert.equal((await fetch(`${base}/api/maps/${doc.documentId}/restore`, { method: 'POST', headers })).status, 200);
+    assert.equal((await fetch(`${base}/api/maps/${doc.documentId}/permanent`, { method: 'DELETE', headers, body: JSON.stringify({ confirmation: doc.title }) })).status, 404);
+    assert.equal((await fetch(`${base}/api/maps/${doc.documentId}`)).status, 200);
     assert.equal((await fetch(`${base}/api/maps/${doc.documentId}/snapshots`)).status, 200);
   } finally { await new Promise<void>((r, e) => server.close(error => error ? e(error) : r())); await store.close(); rmSync(dir, { recursive: true, force: true }); }
 });

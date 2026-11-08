@@ -103,7 +103,6 @@ export class MapStore {
   restoreMap(id: string): MindmapDocument {
     const row = this.db.prepare('SELECT deleted_at FROM maps WHERE id=?').get(id);
     if (!row || !row.deleted_at) throw new StoreError(404, 'ゴミ箱にマップが見つかりません。');
-    if (Date.now() - Date.parse(String(row.deleted_at)) > 30 * 86400000) throw new StoreError(410, '30日の復元期限を過ぎています。JSON出力またはバックアップで保全してください。');
     this.db.prepare('UPDATE maps SET deleted_at=NULL WHERE id=?').run(id);
     return this.get(id);
   }

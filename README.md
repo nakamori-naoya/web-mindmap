@@ -40,7 +40,7 @@ docker compose --project-directory /path/to/web-mindmap -f /path/to/web-mindmap/
 docker compose --project-directory /path/to/web-mindmap -f /path/to/web-mindmap/compose.yaml up -d
 ```
 
-復元コマンドは元のDBを /path/to/web-mindmap/data 内の日時付き退避ファイルへ保存し、復元前後にSQLiteと文書の整合性を検査します。復元中にサーバーを起動しないでください。ゴミ箱は30日以内のマップを復元できます。30日を超えても自動で完全削除せず、JSON保全と明示的な完全削除を利用者が判断します。
+復元コマンドは元のDBを /path/to/web-mindmap/data 内の日時付き退避ファイルへ保存し、復元前後にSQLiteと文書の整合性を検査します。復元中にサーバーを起動しないでください。ゴミ箱へ移して約30日後に、アプリ内の一覧で完全削除するか確認します。了承するまでは自動削除せず、30日を超えても復元できます。完全削除はマップ名の入力と明示的な承認が必要です。既存バックアップや書き出したファイルは別管理です。
 
 ## 開発と検証
 

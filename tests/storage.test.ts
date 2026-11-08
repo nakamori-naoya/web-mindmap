@@ -70,7 +70,7 @@ test('バックアップ保存先障害を成功扱いせず、コミットさ�
   } finally { await store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('期限を超えたゴミ箱を復元せず、日次バックアップを7日分に保つ', async () => {
+test('確認を保留した30日超のマップを復元でき、日次バックアップを7日分に保つ', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'mindmap-retention-')); const store = new MapStore(resolve(dir, 'data'));
   try {
     const doc = createDocument('期限の検証'); await store.create(doc);
@@ -80,7 +80,8 @@ test('期限を超えたゴミ箱を復元せず、日次バックアップを7�
     assert.equal(readdirSync(backupDir).filter(name => name.endsWith('.sqlite')).length, 7);
     store.trash(doc.documentId);
     store.db.prepare('UPDATE maps SET deleted_at=? WHERE id=?').run(new Date(Date.now() - 31 * 86400000).toISOString(), doc.documentId);
-    assert.throws(() => store.restoreMap(doc.documentId), /30日/); assert.equal(store.list(true).length, 1);
+    assert.equal(store.list(true).length, 1);
+    assert.deepEqual(store.restoreMap(doc.documentId), doc); assert.equal(store.list(true).length, 0);
   } finally { await store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
